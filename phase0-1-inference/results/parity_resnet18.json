@@ -1,0 +1,7 @@
+{
+  "model": "resnet18.onnx",
+  "max_abs_diff": 5.543231964111328e-05,
+  "mean_abs_diff": 6.644141649303492e-06,
+  "top1_agreement_with_fp32": 1.0,
+  "num_images": 100
+}

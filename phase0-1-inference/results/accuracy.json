@@ -1,0 +1,47 @@
+{
+  "pytorch_fp32": {
+    "accuracy": 0.676,
+    "correct": 338,
+    "n": 500,
+    "wilson_95ci": [
+      0.6337715143893493,
+      0.7155447177681845
+    ]
+  },
+  "onnx_fp32": {
+    "accuracy": 0.676,
+    "correct": 338,
+    "n": 500,
+    "wilson_95ci": [
+      0.6337715143893493,
+      0.7155447177681845
+    ],
+    "right_to_wrong": 0,
+    "wrong_to_right": 0,
+    "agree_with_fp32": 1.0
+  },
+  "onnx_int8": {
+    "accuracy": 0.686,
+    "correct": 343,
+    "n": 500,
+    "wilson_95ci": [
+      0.6440316011844003,
+      0.7251321441639025
+    ],
+    "right_to_wrong": 2,
+    "wrong_to_right": 7,
+    "agree_with_fp32": 0.966
+  },
+  "pytorch_mps": {
+    "accuracy": 0.676,
+    "correct": 338,
+    "n": 500,
+    "wilson_95ci": [
+      0.6337715143893493,
+      0.7155447177681845
+    ],
+    "right_to_wrong": 0,
+    "wrong_to_right": 0,
+    "agree_with_fp32": 1.0
+  }
+}

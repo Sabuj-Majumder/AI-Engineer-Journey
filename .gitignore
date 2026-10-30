@@ -1,7 +1,17 @@
+# Python
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-results/*.onnx
+
+# macOS
 .DS_Store
-data
-results/graphs
+
+# Datasets - regenerate with: python -m src.prepare_data
+data/
+
+# Model artifacts - regenerate with: python -m src.export_onnx, src.quantize, src.bench_onnx
+*.onnx
+*.tgz
+
+# Private roadmap, not for the public repo
+journey.md
