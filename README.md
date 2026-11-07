@@ -4,7 +4,7 @@ Production inference engineering, built from scratch on a laptop.
 
 Each phase takes one concrete problem — make a model fast, serve it, containerize it, then do the same for LLMs — and solves it with measurements instead of guesses. No training, no notebooks. The focus is everything that happens to a model *after* it has been trained.
 
-**Status:** Phase 0 and 1 complete.
+**Status:** Phase 0, 1 and 2 complete.
 
 ---
 
@@ -104,14 +104,75 @@ phase0-1-inference/
 
 ---
 
+## Phase 2 — Serving It With FastAPI
+
+A fast model sitting in a benchmark script is not a product. This phase wraps the Phase 1 INT8 model in a real HTTP service, and checks whether the speed survives the trip.
+
+| Metric | Result |
+|---|---|
+| Inference time inside the service | 4.01 ms (Phase 1 standalone benchmark: 3.8 ms — essentially the same) |
+| Model's share of total request time | 72.4% (the rest is decode + preprocessing) |
+| Cold-start vs steady-state decode time | 26 ms → 0.25 ms (100x), a one-time thread-pool warm-up cost |
+| Concurrent request latency, load doubled (10 → 20) | +21% for the correct endpoint, **+107% for the broken one** |
+
+**→ [Read the full write-up](phase2-serving/observation2.md)** — including the measurement that initially pointed the wrong way, and what fixed it.
+
+### The finding that mattered most
+
+The real experiment here was `def` vs `async def`: does it matter whether a FastAPI endpoint is declared as `async def` when the work inside it is CPU-bound model inference rather than something waiting on a network call? The theory says yes — blocking CPU work inside `async def` ties up the single event-loop thread, so concurrent requests stop overlapping and start queuing.
+
+My first measurement said the opposite. At 10 concurrent requests, the "correct" endpoint (plain `def`, dispatched to a thread pool) measured *slower* than the deliberately wrong one (`async def`, blocking the event loop). Taken at face value, that would have meant the theory was wrong.
+
+It wasn't. The first run included a one-time thread-pool warm-up cost that inflated that single number. Instead of trusting it, I reran both endpoints at two load levels, 10 and 20 concurrent requests, and looked at how each one *scaled*:
+
+- The broken endpoint's latency nearly doubled when load doubled (69 ms → 143 ms) — the signature of requests being processed one at a time.
+- The correct endpoint's latency barely moved (63 ms → 76 ms) — the signature of requests actually overlapping across threads.
+
+A single measurement said one thing. A scaling trend across two load levels said the true thing. That is the same discipline Phase 1 used to confirm the batch-32 anomaly was real and not noise, now applied to a web service instead of a benchmark script.
+
+### Other things worth knowing
+
+- **The model loads once, at startup**, via FastAPI's `lifespan` hook — not per request. Loading it per request would have quietly erased the entire Phase 1 result by paying the model-load cost on every single call.
+- **The service has zero dependency on PyTorch.** Preprocessing (resize, crop, normalize) is reimplemented using only PIL and NumPy, because torch is roughly 800 MB and is not needed to run an already-exported ONNX model. The risk of a hand-rolled reimplementation is a silent mismatch with the original pipeline, so it's tested directly against torchvision's output and matches to five decimal places. Torch now appears only in that one test, never in the deployed service.
+- **`/health` and `/ready` are two different checks.** The process can be alive before the model has finished loading, and a load balancer needs to know the difference before it sends real traffic.
+
+### Reproduce it
+
+```bash
+cd phase2-serving
+python -c "
+import json, torchvision.models as m
+json.dump(m.ResNet18_Weights.IMAGENET1K_V1.meta['categories'], open('app/imagenet_classes.json','w'))
+"                                              # one-time: class index -> class name
+python -m pytest tests/ -v                    # 13 tests, including preprocessing parity vs torchvision
+uvicorn app.main:app --port 8000              # then open http://localhost:8000/docs
+```
+
+### Project layout
+
+```
+phase2-serving/
+├── observation2.md       # full write-up: results, analysis, limitations
+├── app/
+│   ├── config.py         # all settings in one place
+│   ├── schemas.py        # Pydantic request/response models
+│   ├── inference.py      # model wrapper + torch-free preprocessing
+│   ├── main.py           # FastAPI app, lifespan, routes
+│   └── logging_utils.py
+└── tests/
+    └── test_api.py       # API tests + preprocessing-parity check
+```
+
+---
+
 ## Roadmap
 
 | Phase | Topic | Status |
 |---|---|---|
 | 0 | Production mindset: reproducible environments, config, logging, benchmark hygiene | Done |
 | 1 | Inference fundamentals: ONNX, quantization, graph optimization, benchmarking | Done |
-| 2 | Serving: FastAPI, model lifecycle, request validation, dynamic batching | Next |
-| 3 | Deployment: Docker, load testing, p95/p99 under concurrency | Planned |
+| 2 | Serving: FastAPI, model lifecycle, request validation, concurrency | Done |
+| 3 | Deployment: Docker, load testing, p95/p99 under concurrency | Next |
 | 4 | LLM internals: attention cost, autoregressive decoding, KV-cache | Planned |
 | 5 | LLM quantization: GGUF, llama.cpp, accuracy vs speed trade-offs | Planned |
 | 6 | LLM serving: vLLM, PagedAttention, continuous batching, TTFT | Planned |
@@ -121,7 +182,7 @@ phase0-1-inference/
 
 ## Stack
 
-PyTorch · ONNX · ONNX Runtime · static INT8 quantization (QDQ, per-channel) · Apple MPS · NumPy · statsmodels
+PyTorch · ONNX · ONNX Runtime · static INT8 quantization (QDQ, per-channel) · Apple MPS · NumPy · statsmodels · FastAPI · Pydantic · Uvicorn · Pillow
 
 ---
 
@@ -129,7 +190,13 @@ PyTorch · ONNX · ONNX Runtime · static INT8 quantization (QDQ, per-channel) �
 
 Stated here rather than left for someone else to find:
 
+**Phase 0 + 1:**
 - The batch-32 speedup numbers are inflated, because the PyTorch CPU baseline degrades badly at that batch size. The fair comparison there is INT8 against FP32 ONNX (~4x), not against PyTorch (7.8x).
 - Absolute accuracy is optimistic — the evaluation images likely overlap with ResNet-18's original training data, so only the *differences between models* are meaningful here, which is what was being measured.
 - 500 evaluation images is enough to rule out a large accuracy drop, not a sub-1-point one.
 - CPU and Apple GPU only. None of these numbers transfer to CUDA deployment.
+
+**Phase 2:**
+- Concurrency was tested up to 20 requests on one process, on one laptop — the scaling trend is clear, but these are not production-scale numbers.
+- No authentication, rate limiting, or load balancer in front of the service. This is a serving-fundamentals exercise, not a hardened production API.
+- Tested client-to-server on the same machine. Real network latency and proxies aren't part of this measurement — that's Phase 3's job, with Docker and a proper load-testing tool.
