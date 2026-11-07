@@ -7,3 +7,8 @@ numpy
 pandas
 tabulate
 statsmodels
+fastapi
+uvicorn[standard]
+pillow
+pytest
+httpx
